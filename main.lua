@@ -1,6 +1,6 @@
 --[[
   K2 AUTO XP
-  Burst until ~65 XP → 5s cooldown → repeat
+  Spam FireServer exactly 65 times → 5s cooldown → repeat
   Nearest trampoline · Net index 7
 ]]
 
@@ -41,9 +41,8 @@ local TIS = TweenInfo.new(0.22, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 local REMOTE_INDEX = 7
 local REMOTE_NAME = "RE/2a4a739e892f02341202c7eb24c717adf63253d4278ae6098eb36780929a1233"
 
--- Timing: ~65 XP then 5s gate
-local FIRE_DELAY = 0.035
-local BURST_SECONDS = 9.0   -- longer burst to reach ~65 XP
+local FIRE_DELAY = 0.03
+local FIRES_PER_BURST = 65   -- exact spam count
 local COOLDOWN_SECONDS = 5
 local RESCAN_EVERY = 1.5
 local NEAR_MAX = 120
@@ -342,7 +341,7 @@ local function fireOnce()
 	return false, tostring(err)
 end
 
-local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel, dot)
+local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel, burstLabel, dot)
 	if running then return end
 	running = true
 	task.spawn(function()
@@ -353,16 +352,23 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 				cycleLabel.Text = "Cycle " .. tostring(cycleCount)
 			end
 
-			local burstEnd = tick() + BURST_SECONDS
-			while enabled and tick() < burstEnd do
+			-- exactly 65 fires
+			local burstDone = 0
+			while enabled and burstDone < FIRES_PER_BURST do
 				local ok, info = fireOnce()
+				if ok then
+					burstDone += 1
+				end
 				if countLabel then countLabel.Text = tostring(fireCount) end
+				if burstLabel then
+					burstLabel.Text = tostring(burstDone) .. "/" .. tostring(FIRES_PER_BURST)
+				end
 				if mutLabel then
 					mutLabel.Text = "Mutation: " .. (detectMutation() or "nearest")
 				end
 				if statusLabel then
 					if ok then
-						statusLabel.Text = "Burst · ~65 XP"
+						statusLabel.Text = "Firing " .. burstDone .. "/" .. FIRES_PER_BURST
 						statusLabel.TextColor3 = Theme.Green
 						if dot then dot.BackgroundColor3 = Theme.Green end
 						if subLabel and type(info) == "string" then
@@ -375,7 +381,7 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 						cachedRemote = nil
 						stickyModel = nil
 						scanTrampolines()
-						task.wait(0.25)
+						task.wait(0.2)
 					end
 				end
 				task.wait(FIRE_DELAY)
@@ -393,7 +399,10 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 				end
 				if dot then dot.BackgroundColor3 = Theme.Amber end
 				if subLabel then
-					subLabel.Text = "Cap ~65 XP · waiting"
+					subLabel.Text = "65 fires done · resting"
+				end
+				if burstLabel then
+					burstLabel.Text = "0/" .. tostring(FIRES_PER_BURST)
 				end
 				task.wait(1)
 			end
@@ -516,7 +525,7 @@ corner(Dot, 4)
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.BackgroundTransparency = 1
 StatusLabel.Position = UDim2.new(0, 28, 0, 4)
-StatusLabel.Size = UDim2.new(0.55, 0, 0, 16)
+StatusLabel.Size = UDim2.new(0.58, 0, 0, 16)
 StatusLabel.Font = FT
 StatusLabel.Text = "Idle"
 StatusLabel.TextSize = 11
@@ -530,7 +539,7 @@ SubLabel.BackgroundTransparency = 1
 SubLabel.Position = UDim2.new(0, 28, 0, 20)
 SubLabel.Size = UDim2.new(0.62, 0, 0, 14)
 SubLabel.Font = FB
-SubLabel.Text = "Burst → 5s cooldown"
+SubLabel.Text = "65 fires → 5s rest"
 SubLabel.TextSize = 9
 SubLabel.TextColor3 = Theme.Muted
 SubLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -562,14 +571,26 @@ CycleLabel.TextXAlignment = Enum.TextXAlignment.Left
 CycleLabel.ZIndex = 12
 CycleLabel.Parent = StatusCard
 
+local BurstLabel = Instance.new("TextLabel")
+BurstLabel.BackgroundTransparency = 1
+BurstLabel.Position = UDim2.new(0.55, 0, 0, 36)
+BurstLabel.Size = UDim2.new(0.42, -6, 0, 14)
+BurstLabel.Font = FT
+BurstLabel.Text = "0/65"
+BurstLabel.TextSize = 12
+BurstLabel.TextColor3 = Theme.Cyan
+BurstLabel.TextXAlignment = Enum.TextXAlignment.Right
+BurstLabel.ZIndex = 12
+BurstLabel.Parent = StatusCard
+
 local CountLabel = Instance.new("TextLabel")
 CountLabel.BackgroundTransparency = 1
-CountLabel.Position = UDim2.new(0.65, 0, 0, 0)
-CountLabel.Size = UDim2.new(0.32, -6, 1, 0)
+CountLabel.Position = UDim2.new(0.65, 0, 0, 2)
+CountLabel.Size = UDim2.new(0.32, -6, 0, 20)
 CountLabel.Font = FT
 CountLabel.Text = "0"
-CountLabel.TextSize = 16
-CountLabel.TextColor3 = Theme.Cyan
+CountLabel.TextSize = 14
+CountLabel.TextColor3 = Theme.Muted
 CountLabel.TextXAlignment = Enum.TextXAlignment.Right
 CountLabel.ZIndex = 12
 CountLabel.Parent = StatusCard
@@ -602,7 +623,7 @@ ToggleDesc.BackgroundTransparency = 1
 ToggleDesc.Position = UDim2.new(0, 12, 0, 26)
 ToggleDesc.Size = UDim2.new(1, -70, 0, 14)
 ToggleDesc.Font = FB
-ToggleDesc.Text = "~65 XP burst · auto 5s rest"
+ToggleDesc.Text = "Exactly 65 fires · 5s cooldown"
 ToggleDesc.TextSize = 9
 ToggleDesc.TextColor3 = Theme.Muted
 ToggleDesc.TextXAlignment = Enum.TextXAlignment.Left
@@ -656,13 +677,14 @@ Hit.MouseButton1Click:Connect(function()
 		StatusLabel.Text = "Starting…"
 		StatusLabel.TextColor3 = Theme.Amber
 		Dot.BackgroundColor3 = Theme.Amber
-		startLoop(StatusLabel, CountLabel, SubLabel, MutLabel, CycleLabel, Dot)
+		startLoop(StatusLabel, CountLabel, SubLabel, MutLabel, CycleLabel, BurstLabel, Dot)
 	else
 		running = false
 		StatusLabel.Text = "Idle"
 		StatusLabel.TextColor3 = Theme.Muted
 		Dot.BackgroundColor3 = Theme.Muted
 		SubLabel.Text = "Toggle on to farm"
+		BurstLabel.Text = "0/65"
 	end
 end)
 
@@ -718,9 +740,4 @@ task.defer(function()
 	TS:Create(mainStroke, TIS, { Transparency = 0.45 }):Play()
 end)
 
-task.spawn(function()
-	task.wait(0.4)
-	print("[K2 AUTO XP] ~65 XP burst ·", COOLDOWN_SECONDS, "s cooldown")
-end)
-
-print("[K2 AUTO XP] ready · 65 XP / 5s CD")
+print("[K2 AUTO XP] ready · exactly 65 fires then 5s CD")
