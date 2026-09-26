@@ -1,6 +1,6 @@
 --[[
   K2 AUTO XP
-  Toggle fires trampoline Weld remote on a steady loop
+  Exact FireServer path from your snippet
 ]]
 
 repeat task.wait() until game:IsLoaded()
@@ -13,7 +13,6 @@ end)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LP = Players.LocalPlayer
@@ -24,13 +23,11 @@ local Theme = {
 	Panel     = Color3.fromRGB(14, 18, 28),
 	Card      = Color3.fromRGB(22, 28, 42),
 	Cyan      = Color3.fromRGB(90, 210, 255),
-	Teal      = Color3.fromRGB(70, 190, 180),
 	Green     = Color3.fromRGB(90, 220, 140),
 	Red       = Color3.fromRGB(255, 90, 110),
 	Muted     = Color3.fromRGB(120, 135, 160),
 	Text      = Color3.fromRGB(230, 236, 245),
 	Amber     = Color3.fromRGB(255, 190, 90),
-	Stroke    = Color3.fromRGB(70, 120, 160),
 }
 
 local FT = Enum.Font.GothamBold
@@ -45,6 +42,8 @@ local FIRE_DELAY = 0.05
 local enabled = false
 local fireCount = 0
 local running = false
+local cachedRemote = nil
+local cachedWeld = nil
 
 local function corner(parent, r)
 	local c = Instance.new("UICorner")
@@ -55,42 +54,80 @@ end
 
 local function stroke(parent, color, thickness, transparency)
 	local s = Instance.new("UIStroke")
-	s.Color = color or Theme.Stroke
+	s.Color = color or Theme.Cyan
 	s.Thickness = thickness or 1
 	s.Transparency = transparency or 0.4
 	s.Parent = parent
 	return s
 end
 
-local function getRemote()
-	local ok, remote = pcall(function()
-		return ReplicatedStorage:WaitForChild("Packages", 5)
-			:WaitForChild("Net", 5)
-			:WaitForChild(REMOTE_NAME, 5)
-	end)
-	if ok and remote then return remote end
-	return nil
-end
-
-local function getWeld()
-	local ok, weld = pcall(function()
-		return workspace:WaitForChild("Map", 5)
-			:WaitForChild("BaseTrampolines", 5)
-			:WaitForChild("DefaultTrampoline", 5)
-			:WaitForChild("Weld", 5)
-	end)
-	if ok and weld then return weld end
-	return nil
-end
-
-local function fireOnce()
-	local remote = getRemote()
-	local weld = getWeld()
-	if not remote or not weld then
-		return false, "missing remote/weld"
+-- Exact same resolve as your snippet
+local function resolveWeld()
+	if cachedWeld and cachedWeld.Parent then
+		return cachedWeld
 	end
+	local ok, weld = pcall(function()
+		return workspace:WaitForChild("Map")
+			:WaitForChild("BaseTrampolines")
+			:WaitForChild("DefaultTrampoline")
+			:WaitForChild("Weld")
+	end)
+	if ok and weld then
+		cachedWeld = weld
+		return weld
+	end
+	return nil
+end
+
+local function resolveRemote()
+	if cachedRemote and cachedRemote.Parent then
+		return cachedRemote
+	end
+	local ok, remote = pcall(function()
+		return ReplicatedStorage:WaitForChild("Packages")
+			:WaitForChild("Net")
+			:WaitForChild(REMOTE_NAME)
+	end)
+	if ok and remote then
+		cachedRemote = remote
+		return remote
+	end
+	-- fallback: scan Net children for matching full name
+	pcall(function()
+		local Net = ReplicatedStorage:FindFirstChild("Packages")
+			and ReplicatedStorage.Packages:FindFirstChild("Net")
+		if not Net then return end
+		local exact = Net:FindFirstChild(REMOTE_NAME)
+		if exact then
+			cachedRemote = exact
+			return
+		end
+		for _, child in ipairs(Net:GetChildren()) do
+			if child.Name == REMOTE_NAME
+				or child.Name:find("2a4a739e892f02341202c7eb24c717adf63253d4278ae6098eb36780929a1233", 1, true)
+			then
+				cachedRemote = child
+				return
+			end
+		end
+	end)
+	return cachedRemote
+end
+
+-- EXACT fire from your snippet
+local function fireOnce()
 	local ok, err = pcall(function()
-		remote:FireServer(weld)
+		local args = {
+			workspace:WaitForChild("Map")
+				:WaitForChild("BaseTrampolines")
+				:WaitForChild("DefaultTrampoline")
+				:WaitForChild("Weld")
+		}
+		game:GetService("ReplicatedStorage")
+			:WaitForChild("Packages")
+			:WaitForChild("Net")
+			:WaitForChild(REMOTE_NAME)
+			:FireServer(unpack(args))
 	end)
 	if ok then
 		fireCount += 1
@@ -114,7 +151,7 @@ local function startLoop(statusLabel, countLabel, dot)
 					statusLabel.TextColor3 = Theme.Green
 					if dot then dot.BackgroundColor3 = Theme.Green end
 				else
-					statusLabel.Text = err or "Error"
+					statusLabel.Text = (err and err:sub(1, 28)) or "Error"
 					statusLabel.TextColor3 = Theme.Red
 					if dot then dot.BackgroundColor3 = Theme.Red end
 				end
@@ -177,7 +214,6 @@ Main.Parent = ScreenGui
 corner(Main, 14)
 local mainStroke = stroke(Main, Theme.Cyan, 1, 1)
 
--- Header
 local Header = Instance.new("Frame")
 Header.Size = UDim2.new(1, 0, 0, 36)
 Header.BackgroundColor3 = Theme.Void
@@ -212,7 +248,6 @@ Close.ZIndex = 13
 Close.Parent = Header
 corner(Close, 8)
 
--- Status row
 local StatusCard = Instance.new("Frame")
 StatusCard.Size = UDim2.new(1, -20, 0, 40)
 StatusCard.Position = UDim2.new(0, 10, 0, 46)
@@ -269,7 +304,6 @@ CountLabel.TextXAlignment = Enum.TextXAlignment.Right
 CountLabel.ZIndex = 12
 CountLabel.Parent = StatusCard
 
--- Toggle card
 local ToggleCard = Instance.new("Frame")
 ToggleCard.Size = UDim2.new(1, -20, 0, 48)
 ToggleCard.Position = UDim2.new(0, 10, 0, 96)
@@ -373,7 +407,6 @@ Close.MouseButton1Click:Connect(function()
 	end)
 end)
 
--- Drag
 do
 	local dragging, dragStart, startPos
 	Header.InputBegan:Connect(function(input)
@@ -402,7 +435,6 @@ do
 	end)
 end
 
--- Smooth open (no intro screen)
 task.defer(function()
 	Main.BackgroundTransparency = 1
 	mainStroke.Transparency = 1
@@ -412,4 +444,19 @@ task.defer(function()
 	}):Play()
 	TS:Create(mainStroke, TIS, { Transparency = 0.45 }):Play()
 end)
-print("[K2 AUTO XP] ready · toggle to fire trampoline remote")
+
+-- one test resolve on load (does not fire)
+task.spawn(function()
+	task.wait(0.5)
+	local ok, err = pcall(function()
+		local _ = workspace:WaitForChild("Map"):WaitForChild("BaseTrampolines"):WaitForChild("DefaultTrampoline"):WaitForChild("Weld")
+		local _r = game:GetService("ReplicatedStorage"):WaitForChild("Packages"):WaitForChild("Net"):WaitForChild(REMOTE_NAME)
+	end)
+	if ok then
+		print("[K2 AUTO XP] remote + weld found")
+	else
+		warn("[K2 AUTO XP] resolve warn:", err)
+	end
+end)
+
+print("[K2 AUTO XP] ready · exact FireServer path")
