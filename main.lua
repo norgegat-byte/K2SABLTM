@@ -1,7 +1,7 @@
 --[[
   K2 AUTO XP
-  Server caps ~33 XP then ~10s cooldown.
-  Burst fire → auto wait 10s → burst again (no manual re-toggle).
+  Server caps ~33 XP then ~5s cooldown.
+  Burst fire → auto wait 5s → burst again (no manual re-toggle).
   Nearest trampoline lock · Net index 7
 ]]
 
@@ -46,9 +46,9 @@ local REMOTE_NAME = "RE/2a4a739e892f02341202c7eb24c717adf63253d4278ae6098eb36780
 -- Timing (matches observed server: ~33 XP then ~10s gate)
 local FIRE_DELAY = 0.035
 local BURST_SECONDS = 4.5   -- long enough to hit the ~33 XP cap
-local COOLDOWN_SECONDS = 10 -- server gate after cap
+local COOLDOWN_SECONDS = 5 -- server gate after cap
 local RESCAN_EVERY = 1.5
-local NEAR_MAX = 120
+local NEAR_MAX = 60
 local STICKY_SEC = 6
 
 local MUTATIONS = {
