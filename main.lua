@@ -1,8 +1,7 @@
 --[[
   K2 AUTO XP
-  Server caps ~33 XP then ~5s cooldown.
-  Burst fire → auto wait 5s → burst again (no manual re-toggle).
-  Nearest trampoline lock · Net index 7
+  Burst until ~65 XP → 5s cooldown → repeat
+  Nearest trampoline · Net index 7
 ]]
 
 repeat task.wait() until game:IsLoaded()
@@ -39,16 +38,15 @@ local TIQ = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local TIB = TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local TIS = TweenInfo.new(0.22, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 
--- Remote
 local REMOTE_INDEX = 7
 local REMOTE_NAME = "RE/2a4a739e892f02341202c7eb24c717adf63253d4278ae6098eb36780929a1233"
 
--- Timing (matches observed server: ~33 XP then ~10s gate)
+-- Timing: ~65 XP then 5s gate
 local FIRE_DELAY = 0.035
-local BURST_SECONDS = 4.5   -- long enough to hit the ~33 XP cap
-local COOLDOWN_SECONDS = 5 -- server gate after cap
+local BURST_SECONDS = 9.0   -- longer burst to reach ~65 XP
+local COOLDOWN_SECONDS = 5
 local RESCAN_EVERY = 1.5
-local NEAR_MAX = 60
+local NEAR_MAX = 120
 local STICKY_SEC = 6
 
 local MUTATIONS = {
@@ -213,7 +211,6 @@ local function scanTrampolines()
 		end
 	end
 
-	-- fallback full workspace if empty
 	if #list == 0 then
 		for _, d in ipairs(Workspace:GetDescendants()) do
 			if d.Name == "Weld" then
@@ -239,15 +236,8 @@ local function pickTrampoline()
 	local alive = {}
 	for _, t in ipairs(trampList) do
 		if t.weld and t.weld.Parent then
-			-- re-find Weld if model still exists but weld ref died
-			if not t.weld.Parent then
-				local w = t.model and t.model:FindFirstChild("Weld", true)
-				if w then t.weld = w end
-			end
-			if t.weld and t.weld.Parent then
-				t.pos = worldPos(t.model) or worldPos(t.weld) or t.pos
-				table.insert(alive, t)
-			end
+			t.pos = worldPos(t.model) or worldPos(t.weld) or t.pos
+			table.insert(alive, t)
 		elseif t.model and t.model.Parent then
 			local w = t.model:FindFirstChild("Weld", true)
 			if w then
@@ -265,7 +255,6 @@ local function pickTrampoline()
 	local mut = detectMutation()
 	local hrp = getHRP()
 
-	-- sticky lock (prevents hop mid-burst)
 	if stickyModel and tick() < stickyUntil then
 		for _, t in ipairs(trampList) do
 			if t.model == stickyModel and t.weld and t.weld.Parent then
@@ -276,7 +265,6 @@ local function pickTrampoline()
 		stickyModel = nil
 	end
 
-	-- nearest
 	if hrp then
 		local best, bestDist = nil, math.huge
 		for _, t in ipairs(trampList) do
@@ -365,7 +353,6 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 				cycleLabel.Text = "Cycle " .. tostring(cycleCount)
 			end
 
-			-- ===== BURST (hit ~33 XP cap) =====
 			local burstEnd = tick() + BURST_SECONDS
 			while enabled and tick() < burstEnd do
 				local ok, info = fireOnce()
@@ -375,7 +362,7 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 				end
 				if statusLabel then
 					if ok then
-						statusLabel.Text = "Burst · firing"
+						statusLabel.Text = "Burst · ~65 XP"
 						statusLabel.TextColor3 = Theme.Green
 						if dot then dot.BackgroundColor3 = Theme.Green end
 						if subLabel and type(info) == "string" then
@@ -385,7 +372,6 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 						statusLabel.Text = (info and tostring(info):sub(1, 26)) or "Error"
 						statusLabel.TextColor3 = Theme.Red
 						if dot then dot.BackgroundColor3 = Theme.Red end
-						-- recover
 						cachedRemote = nil
 						stickyModel = nil
 						scanTrampolines()
@@ -397,8 +383,7 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 
 			if not enabled then break end
 
-			-- ===== COOLDOWN (server ~10s after 33 XP) =====
-			stickyModel = nil -- allow re-lock after rest
+			stickyModel = nil
 			cachedRemote = nil
 			for left = COOLDOWN_SECONDS, 1, -1 do
 				if not enabled then break end
@@ -408,7 +393,7 @@ local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel
 				end
 				if dot then dot.BackgroundColor3 = Theme.Amber end
 				if subLabel then
-					subLabel.Text = "Server cap ~33 XP · waiting"
+					subLabel.Text = "Cap ~65 XP · waiting"
 				end
 				task.wait(1)
 			end
@@ -545,7 +530,7 @@ SubLabel.BackgroundTransparency = 1
 SubLabel.Position = UDim2.new(0, 28, 0, 20)
 SubLabel.Size = UDim2.new(0.62, 0, 0, 14)
 SubLabel.Font = FB
-SubLabel.Text = "Burst → 10s cooldown"
+SubLabel.Text = "Burst → 5s cooldown"
 SubLabel.TextSize = 9
 SubLabel.TextColor3 = Theme.Muted
 SubLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -617,7 +602,7 @@ ToggleDesc.BackgroundTransparency = 1
 ToggleDesc.Position = UDim2.new(0, 12, 0, 26)
 ToggleDesc.Size = UDim2.new(1, -70, 0, 14)
 ToggleDesc.Font = FB
-ToggleDesc.Text = "~33 XP burst · auto 10s rest"
+ToggleDesc.Text = "~65 XP burst · auto 5s rest"
 ToggleDesc.TextSize = 9
 ToggleDesc.TextColor3 = Theme.Muted
 ToggleDesc.TextXAlignment = Enum.TextXAlignment.Left
@@ -735,8 +720,7 @@ end)
 
 task.spawn(function()
 	task.wait(0.4)
-	local list = scanTrampolines()
-	print("[K2 AUTO XP] trampolines:", #list, "| burst", BURST_SECONDS, "s + cooldown", COOLDOWN_SECONDS, "s")
+	print("[K2 AUTO XP] ~65 XP burst ·", COOLDOWN_SECONDS, "s cooldown")
 end)
 
-print("[K2 AUTO XP] ready · auto cooldown after ~33 XP cap")
+print("[K2 AUTO XP] ready · 65 XP / 5s CD")
