@@ -1,7 +1,8 @@
 --[[
   K2 AUTO XP
-  Scans ALL trampoline Welds (base + mutation variants)
-  Fires Net index 7 from anywhere — cycles every found Weld
+  Server caps ~33 XP then ~10s cooldown.
+  Burst fire → auto wait 10s → burst again (no manual re-toggle).
+  Nearest trampoline lock · Net index 7
 ]]
 
 repeat task.wait() until game:IsLoaded()
@@ -21,15 +22,15 @@ local LP = Players.LocalPlayer
 local TS = TweenService
 
 local Theme = {
-	Void      = Color3.fromRGB(8, 10, 16),
-	Panel     = Color3.fromRGB(14, 18, 28),
-	Card      = Color3.fromRGB(22, 28, 42),
-	Cyan      = Color3.fromRGB(90, 210, 255),
-	Green     = Color3.fromRGB(90, 220, 140),
-	Red       = Color3.fromRGB(255, 90, 110),
-	Muted     = Color3.fromRGB(120, 135, 160),
-	Text      = Color3.fromRGB(230, 236, 245),
-	Amber     = Color3.fromRGB(255, 190, 90),
+	Void  = Color3.fromRGB(8, 10, 16),
+	Panel = Color3.fromRGB(14, 18, 28),
+	Card  = Color3.fromRGB(22, 28, 42),
+	Cyan  = Color3.fromRGB(90, 210, 255),
+	Green = Color3.fromRGB(90, 220, 140),
+	Red   = Color3.fromRGB(255, 90, 110),
+	Muted = Color3.fromRGB(120, 135, 160),
+	Text  = Color3.fromRGB(230, 236, 245),
+	Amber = Color3.fromRGB(255, 190, 90),
 }
 
 local FT = Enum.Font.GothamBold
@@ -38,27 +39,35 @@ local TIQ = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local TIB = TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local TIS = TweenInfo.new(0.22, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 
+-- Remote
 local REMOTE_INDEX = 7
 local REMOTE_NAME = "RE/2a4a739e892f02341202c7eb24c717adf63253d4278ae6098eb36780929a1233"
-local FIRE_DELAY = 0.04
-local RESCAN_EVERY = 2.5
 
--- Mutations from K2 logger / Steal a Brainrot
-local MUTATION_NAMES = {
-	"None", "Default", "Base",
+-- Timing (matches observed server: ~33 XP then ~10s gate)
+local FIRE_DELAY = 0.035
+local BURST_SECONDS = 4.5   -- long enough to hit the ~33 XP cap
+local COOLDOWN_SECONDS = 10 -- server gate after cap
+local RESCAN_EVERY = 1.5
+local NEAR_MAX = 120
+local STICKY_SEC = 6
+
+local MUTATIONS = {
 	"Gold", "Diamond", "Rainbow", "Divine", "Radioactive",
 	"Cursed", "Galaxy", "Candy", "Bloodrot", "Crystal",
-	"Phantom", "Lava", "Cyber", "YinYang", "YingYang", "Yin Yang",
-	"Safari", "Snow", "Water", "Fire", "Nature",
+	"Phantom", "Lava", "Cyber", "YinYang", "YingYang",
+	"Safari", "Snow", "Water", "Fire", "Nature", "Center",
 }
 
 local enabled = false
 local fireCount = 0
+local cycleCount = 0
 local running = false
 local cachedRemote = nil
-local weldList = {} -- {instance, label}
-local weldIndex = 1
+local trampList = {}
 local lastScan = 0
+local stickyModel = nil
+local stickyUntil = 0
+local lockedLabel = "—"
 
 local function corner(parent, r)
 	local c = Instance.new("UICorner")
@@ -76,28 +85,27 @@ local function stroke(parent, color, thickness, transparency)
 	return s
 end
 
+local function norm(s)
+	return tostring(s or ""):lower():gsub("[%s%_%%-]", "")
+end
+
 local function getNet()
 	local ok, net = pcall(function()
 		return ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net")
 	end)
-	if ok then return net end
-	return nil
+	return ok and net or nil
 end
 
 local function getRemote()
-	if cachedRemote and cachedRemote.Parent then
-		return cachedRemote
-	end
+	if cachedRemote and cachedRemote.Parent then return cachedRemote end
 	local Net = getNet()
 	if not Net then return nil end
-
 	local children = Net:GetChildren()
 	local byIndex = children[REMOTE_INDEX]
 	if byIndex and (byIndex:IsA("RemoteEvent") or byIndex:IsA("RemoteFunction")) then
 		cachedRemote = byIndex
 		return byIndex
 	end
-
 	local byName = Net:FindFirstChild(REMOTE_NAME)
 	if byName then
 		cachedRemote = byName
@@ -106,134 +114,228 @@ local function getRemote()
 	return nil
 end
 
-local function labelFor(weld)
-	local p = weld.Parent
-	local name = p and p.Name or weld.Name
-	-- climb one more if parent is generic
-	if p and p.Parent and p.Parent.Name and p.Parent.Name:lower():find("tramp") then
-		name = p.Name
-	elseif p and p.Parent then
-		name = p.Parent.Name .. "/" .. name
+local function getHRP()
+	local char = LP.Character
+	if not char then return nil end
+	return char:FindFirstChild("HumanoidRootPart")
+		or char:FindFirstChild("UpperTorso")
+		or char.PrimaryPart
+end
+
+local function worldPos(inst)
+	if not inst then return nil end
+	if inst:IsA("BasePart") then return inst.Position end
+	if inst:IsA("Model") then
+		local ok, p = pcall(function() return inst:GetPivot().Position end)
+		if ok and p then return p end
+		local pp = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+		if pp then return pp.Position end
 	end
-	return name
+	local part = inst:FindFirstAncestorWhichIsA("BasePart")
+	if part then return part.Position end
+	return nil
 end
 
-local function isTrampolineRelated(inst)
-	local n = string.lower(inst.Name or "")
-	return n:find("tramp", 1, true)
-		or n:find("bounce", 1, true)
-		or n == "weld"
-end
-
-local function tryAddWeld(list, seen, weld)
-	if not weld or seen[weld] then return end
-	if not (weld:IsA("Weld") or weld:IsA("WeldConstraint") or weld:IsA("Motor6D") or weld.Name == "Weld") then
-		-- still allow Instance named Weld
-		if weld.Name ~= "Weld" then return end
+local function mutationFromString(s)
+	s = tostring(s or "")
+	if s == "" then return nil end
+	local ns = norm(s)
+	if ns == "none" or ns == "nil" or ns == "default" or ns == "0" then
+		return "Default"
 	end
-	seen[weld] = true
-	table.insert(list, { inst = weld, label = labelFor(weld) })
+	for _, m in ipairs(MUTATIONS) do
+		local nm = norm(m)
+		if ns == nm or ns:find(nm, 1, true) then
+			return m
+		end
+	end
+	return nil
 end
 
-local function scanWelds()
-	local list, seen = {}, {}
+local function detectMutation()
+	for _, key in ipairs({ "Mutation", "mutation", "CurrentMutation", "ActiveMutation", "Mut" }) do
+		local m = mutationFromString(LP:GetAttribute(key))
+		if m then return m end
+		local char = LP.Character
+		if char then
+			m = mutationFromString(char:GetAttribute(key))
+			if m then return m end
+		end
+	end
+	return nil
+end
 
-	-- 1) Prefer Map.BaseTrampolines tree
+local function scanTrampolines()
+	local list = {}
+	local seenModel = {}
+
+	local function addWeld(weld)
+		if not weld or not weld.Parent then return end
+		local model = weld.Parent
+		local climb = model
+		for _ = 1, 5 do
+			if not climb then break end
+			local n = string.lower(climb.Name or "")
+			if n:find("tramp", 1, true) then
+				model = climb
+				break
+			end
+			climb = climb.Parent
+		end
+		if seenModel[model] then return end
+		seenModel[model] = true
+		table.insert(list, {
+			model = model,
+			weld = weld,
+			label = model.Name,
+			pos = worldPos(model) or worldPos(weld),
+		})
+	end
+
 	local map = Workspace:FindFirstChild("Map")
-	local base = map and map:FindFirstChild("BaseTrampolines")
-	if base then
-		-- direct children: DefaultTrampoline, GoldTrampoline, etc.
-		for _, child in ipairs(base:GetChildren()) do
-			local weld = child:FindFirstChild("Weld") or child:FindFirstChild("Weld", true)
-			if weld then
-				tryAddWeld(list, seen, weld)
-			end
-			-- nested
-			for _, d in ipairs(child:GetDescendants()) do
-				if d.Name == "Weld" then
-					tryAddWeld(list, seen, d)
-				end
-			end
-		end
-		-- any Weld under BaseTrampolines
-		for _, d in ipairs(base:GetDescendants()) do
-			if d.Name == "Weld" then
-				tryAddWeld(list, seen, d)
-			end
-		end
-	end
-
-	-- 2) Mutation-named trampolines anywhere under Map
+	local roots = {}
 	if map then
-		for _, mut in ipairs(MUTATION_NAMES) do
-			local patterns = {
-				mut .. "Trampoline",
-				mut .. "_Trampoline",
-				"Trampoline" .. mut,
-				mut,
-			}
-			for _, pat in ipairs(patterns) do
-				for _, d in ipairs(map:GetDescendants()) do
-					if d.Name == pat or d.Name:lower() == pat:lower() then
-						local weld = d:FindFirstChild("Weld") or (d.Name == "Weld" and d)
-						if not weld and d:IsA("Model") or d:IsA("Folder") then
-							weld = d:FindFirstChild("Weld", true)
-						end
-						if weld then tryAddWeld(list, seen, weld) end
-					end
-				end
-			end
-		end
-		-- any object with Trampoline in the name that has a Weld
-		for _, d in ipairs(map:GetDescendants()) do
-			if isTrampolineRelated(d) then
-				if d.Name == "Weld" then
-					tryAddWeld(list, seen, d)
-				else
-					local weld = d:FindFirstChild("Weld")
-					if weld then tryAddWeld(list, seen, weld) end
+		local bt = map:FindFirstChild("BaseTrampolines")
+		if bt then table.insert(roots, bt) end
+		table.insert(roots, map)
+	end
+
+	for _, root in ipairs(roots) do
+		for _, d in ipairs(root:GetDescendants()) do
+			if d.Name == "Weld" then
+				local p = d.Parent
+				local pn = p and string.lower(p.Name or "") or ""
+				local ppn = p and p.Parent and string.lower(p.Parent.Name or "") or ""
+				if pn:find("tramp", 1, true) or ppn:find("tramp", 1, true) then
+					addWeld(d)
 				end
 			end
 		end
 	end
 
-	-- 3) Last resort: whole workspace trampoline welds (still no distance check)
+	-- fallback full workspace if empty
 	if #list == 0 then
 		for _, d in ipairs(Workspace:GetDescendants()) do
-			if d.Name == "Weld" and d.Parent and isTrampolineRelated(d.Parent) then
-				tryAddWeld(list, seen, d)
+			if d.Name == "Weld" then
+				local p = d.Parent
+				local pn = p and string.lower(p.Name or "") or ""
+				if pn:find("tramp", 1, true) then
+					addWeld(d)
+				end
 			end
 		end
 	end
 
-	weldList = list
-	if weldIndex > #weldList then weldIndex = 1 end
+	trampList = list
 	lastScan = tick()
 	return list
 end
 
-local function nextWeld()
-	if #weldList == 0 or (tick() - lastScan) > RESCAN_EVERY then
-		scanWelds()
+local function pickTrampoline()
+	if #trampList == 0 or (tick() - lastScan) > RESCAN_EVERY then
+		scanTrampolines()
 	end
-	if #weldList == 0 then return nil, "no trampoline welds" end
-	-- prune dead
-	local entry = weldList[weldIndex]
-	if not entry or not entry.inst or not entry.inst.Parent then
-		scanWelds()
-		entry = weldList[weldIndex]
+
+	local alive = {}
+	for _, t in ipairs(trampList) do
+		if t.weld and t.weld.Parent then
+			-- re-find Weld if model still exists but weld ref died
+			if not t.weld.Parent then
+				local w = t.model and t.model:FindFirstChild("Weld", true)
+				if w then t.weld = w end
+			end
+			if t.weld and t.weld.Parent then
+				t.pos = worldPos(t.model) or worldPos(t.weld) or t.pos
+				table.insert(alive, t)
+			end
+		elseif t.model and t.model.Parent then
+			local w = t.model:FindFirstChild("Weld", true)
+			if w then
+				t.weld = w
+				t.pos = worldPos(t.model) or worldPos(w)
+				table.insert(alive, t)
+			end
+		end
 	end
-	if not entry then return nil, "no trampoline welds" end
-	weldIndex = (weldIndex % #weldList) + 1
-	return entry.inst, entry.label
+	trampList = alive
+	if #trampList == 0 then
+		return nil, "no trampolines", nil
+	end
+
+	local mut = detectMutation()
+	local hrp = getHRP()
+
+	-- sticky lock (prevents hop mid-burst)
+	if stickyModel and tick() < stickyUntil then
+		for _, t in ipairs(trampList) do
+			if t.model == stickyModel and t.weld and t.weld.Parent then
+				lockedLabel = t.label .. " [sticky]"
+				return t.weld, lockedLabel, mut
+			end
+		end
+		stickyModel = nil
+	end
+
+	-- nearest
+	if hrp then
+		local best, bestDist = nil, math.huge
+		for _, t in ipairs(trampList) do
+			if t.pos then
+				local d = (t.pos - hrp.Position).Magnitude
+				if d < bestDist then
+					bestDist = d
+					best = t
+				end
+			end
+		end
+		if best then
+			stickyModel = best.model
+			stickyUntil = tick() + STICKY_SEC
+			if bestDist <= NEAR_MAX then
+				lockedLabel = string.format("%s (near %.0f)", best.label, bestDist)
+			else
+				lockedLabel = string.format("%s (nearest %.0f)", best.label, bestDist)
+			end
+			return best.weld, lockedLabel, mut
+		end
+	end
+
+	if mut and mut ~= "Default" then
+		local nm = norm(mut)
+		for _, t in ipairs(trampList) do
+			if norm(t.label):find(nm, 1, true) then
+				stickyModel = t.model
+				stickyUntil = tick() + STICKY_SEC
+				lockedLabel = t.label .. " (" .. mut .. ")"
+				return t.weld, lockedLabel, mut
+			end
+		end
+	end
+
+	for _, t in ipairs(trampList) do
+		local nl = norm(t.label)
+		if not nl:find("default", 1, true) and nl ~= "trampoline" then
+			stickyModel = t.model
+			stickyUntil = tick() + STICKY_SEC
+			lockedLabel = t.label .. " [variant]"
+			return t.weld, lockedLabel, mut
+		end
+	end
+
+	local t = trampList[1]
+	stickyModel = t.model
+	stickyUntil = tick() + STICKY_SEC
+	lockedLabel = t.label
+	return t.weld, lockedLabel, mut
 end
 
 local function fireOnce()
 	local remote = getRemote()
 	if not remote then
+		cachedRemote = nil
 		return false, "no remote idx 7"
 	end
-	local weld, label = nextWeld()
+	local weld, label = pickTrampoline()
 	if not weld then
 		return false, label or "no weld"
 	end
@@ -248,43 +350,79 @@ local function fireOnce()
 		fireCount += 1
 		return true, label
 	end
+	cachedRemote = nil
 	return false, tostring(err)
 end
 
-local function startLoop(statusLabel, countLabel, subLabel, dot)
+local function startLoop(statusLabel, countLabel, subLabel, mutLabel, cycleLabel, dot)
 	if running then return end
 	running = true
 	task.spawn(function()
-		scanWelds()
-		if subLabel then
-			subLabel.Text = #weldList .. " trampoline weld(s)"
-		end
-		while enabled and running do
-			local ok, info = fireOnce()
-			if countLabel then
-				countLabel.Text = tostring(fireCount)
+		scanTrampolines()
+		while enabled do
+			cycleCount += 1
+			if cycleLabel then
+				cycleLabel.Text = "Cycle " .. tostring(cycleCount)
 			end
-			if statusLabel then
-				if ok then
-					statusLabel.Text = "Firing…"
-					statusLabel.TextColor3 = Theme.Green
-					if dot then dot.BackgroundColor3 = Theme.Green end
-					if subLabel and type(info) == "string" then
-						subLabel.Text = info
-					end
-				else
-					statusLabel.Text = (info and tostring(info):sub(1, 28)) or "Error"
-					statusLabel.TextColor3 = Theme.Red
-					if dot then dot.BackgroundColor3 = Theme.Red end
+
+			-- ===== BURST (hit ~33 XP cap) =====
+			local burstEnd = tick() + BURST_SECONDS
+			while enabled and tick() < burstEnd do
+				local ok, info = fireOnce()
+				if countLabel then countLabel.Text = tostring(fireCount) end
+				if mutLabel then
+					mutLabel.Text = "Mutation: " .. (detectMutation() or "nearest")
 				end
+				if statusLabel then
+					if ok then
+						statusLabel.Text = "Burst · firing"
+						statusLabel.TextColor3 = Theme.Green
+						if dot then dot.BackgroundColor3 = Theme.Green end
+						if subLabel and type(info) == "string" then
+							subLabel.Text = info
+						end
+					else
+						statusLabel.Text = (info and tostring(info):sub(1, 26)) or "Error"
+						statusLabel.TextColor3 = Theme.Red
+						if dot then dot.BackgroundColor3 = Theme.Red end
+						-- recover
+						cachedRemote = nil
+						stickyModel = nil
+						scanTrampolines()
+						task.wait(0.25)
+					end
+				end
+				task.wait(FIRE_DELAY)
 			end
-			task.wait(FIRE_DELAY)
+
+			if not enabled then break end
+
+			-- ===== COOLDOWN (server ~10s after 33 XP) =====
+			stickyModel = nil -- allow re-lock after rest
+			cachedRemote = nil
+			for left = COOLDOWN_SECONDS, 1, -1 do
+				if not enabled then break end
+				if statusLabel then
+					statusLabel.Text = "Cooldown " .. left .. "s"
+					statusLabel.TextColor3 = Theme.Amber
+				end
+				if dot then dot.BackgroundColor3 = Theme.Amber end
+				if subLabel then
+					subLabel.Text = "Server cap ~33 XP · waiting"
+				end
+				task.wait(1)
+			end
+
+			if enabled then
+				scanTrampolines()
+			end
 		end
 		running = false
 		if statusLabel and not enabled then
 			statusLabel.Text = "Idle"
 			statusLabel.TextColor3 = Theme.Muted
 			if dot then dot.BackgroundColor3 = Theme.Muted end
+			if subLabel then subLabel.Text = "Toggle on to farm" end
 		end
 	end)
 end
@@ -320,7 +458,7 @@ do
 	getgenv().K2AutoXpGui = ScreenGui
 end
 
-local PANEL_W, PANEL_H = 250, 178
+local PANEL_W, PANEL_H = 270, 200
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
@@ -371,7 +509,7 @@ Close.Parent = Header
 corner(Close, 8)
 
 local StatusCard = Instance.new("Frame")
-StatusCard.Size = UDim2.new(1, -20, 0, 44)
+StatusCard.Size = UDim2.new(1, -20, 0, 56)
 StatusCard.Position = UDim2.new(0, 10, 0, 46)
 StatusCard.BackgroundColor3 = Theme.Card
 StatusCard.BackgroundTransparency = 0.15
@@ -404,10 +542,10 @@ StatusLabel.Parent = StatusCard
 
 local SubLabel = Instance.new("TextLabel")
 SubLabel.BackgroundTransparency = 1
-SubLabel.Position = UDim2.new(0, 28, 0, 22)
-SubLabel.Size = UDim2.new(0.6, 0, 0, 14)
+SubLabel.Position = UDim2.new(0, 28, 0, 20)
+SubLabel.Size = UDim2.new(0.62, 0, 0, 14)
 SubLabel.Font = FB
-SubLabel.Text = "Scanning trampolines…"
+SubLabel.Text = "Burst → 10s cooldown"
 SubLabel.TextSize = 9
 SubLabel.TextColor3 = Theme.Muted
 SubLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -415,10 +553,34 @@ SubLabel.TextTruncate = Enum.TextTruncate.AtEnd
 SubLabel.ZIndex = 12
 SubLabel.Parent = StatusCard
 
+local MutLabel = Instance.new("TextLabel")
+MutLabel.BackgroundTransparency = 1
+MutLabel.Position = UDim2.new(0, 28, 0, 34)
+MutLabel.Size = UDim2.new(0.55, 0, 0, 12)
+MutLabel.Font = FB
+MutLabel.Text = "Mutation: nearest"
+MutLabel.TextSize = 8
+MutLabel.TextColor3 = Theme.Amber
+MutLabel.TextXAlignment = Enum.TextXAlignment.Left
+MutLabel.ZIndex = 12
+MutLabel.Parent = StatusCard
+
+local CycleLabel = Instance.new("TextLabel")
+CycleLabel.BackgroundTransparency = 1
+CycleLabel.Position = UDim2.new(0, 28, 0, 44)
+CycleLabel.Size = UDim2.new(0.4, 0, 0, 10)
+CycleLabel.Font = FB
+CycleLabel.Text = "Cycle 0"
+CycleLabel.TextSize = 8
+CycleLabel.TextColor3 = Theme.Muted
+CycleLabel.TextXAlignment = Enum.TextXAlignment.Left
+CycleLabel.ZIndex = 12
+CycleLabel.Parent = StatusCard
+
 local CountLabel = Instance.new("TextLabel")
 CountLabel.BackgroundTransparency = 1
-CountLabel.Position = UDim2.new(0.62, 0, 0, 0)
-CountLabel.Size = UDim2.new(0.35, -8, 1, 0)
+CountLabel.Position = UDim2.new(0.65, 0, 0, 0)
+CountLabel.Size = UDim2.new(0.32, -6, 1, 0)
 CountLabel.Font = FT
 CountLabel.Text = "0"
 CountLabel.TextSize = 16
@@ -429,7 +591,7 @@ CountLabel.Parent = StatusCard
 
 local ToggleCard = Instance.new("Frame")
 ToggleCard.Size = UDim2.new(1, -20, 0, 48)
-ToggleCard.Position = UDim2.new(0, 10, 0, 100)
+ToggleCard.Position = UDim2.new(0, 10, 0, 112)
 ToggleCard.BackgroundColor3 = Theme.Card
 ToggleCard.BackgroundTransparency = 0.15
 ToggleCard.BorderSizePixel = 0
@@ -455,7 +617,7 @@ ToggleDesc.BackgroundTransparency = 1
 ToggleDesc.Position = UDim2.new(0, 12, 0, 26)
 ToggleDesc.Size = UDim2.new(1, -70, 0, 14)
 ToggleDesc.Font = FB
-ToggleDesc.Text = "All mutations · no range check"
+ToggleDesc.Text = "~33 XP burst · auto 10s rest"
 ToggleDesc.TextSize = 9
 ToggleDesc.TextColor3 = Theme.Muted
 ToggleDesc.TextXAlignment = Enum.TextXAlignment.Left
@@ -505,15 +667,17 @@ Hit.MouseButton1Click:Connect(function()
 	setToggleVisual(enabled)
 	if enabled then
 		cachedRemote = nil
+		stickyModel = nil
 		StatusLabel.Text = "Starting…"
 		StatusLabel.TextColor3 = Theme.Amber
 		Dot.BackgroundColor3 = Theme.Amber
-		startLoop(StatusLabel, CountLabel, SubLabel, Dot)
+		startLoop(StatusLabel, CountLabel, SubLabel, MutLabel, CycleLabel, Dot)
 	else
 		running = false
 		StatusLabel.Text = "Idle"
 		StatusLabel.TextColor3 = Theme.Muted
 		Dot.BackgroundColor3 = Theme.Muted
+		SubLabel.Text = "Toggle on to farm"
 	end
 end)
 
@@ -570,14 +734,9 @@ task.defer(function()
 end)
 
 task.spawn(function()
-	task.wait(0.5)
-	local list = scanWelds()
-	local r = getRemote()
-	print("[K2 AUTO XP] remote:", r and r.Name or "MISSING", "| welds found:", #list)
-	for i, e in ipairs(list) do
-		print("  ", i, e.label, e.inst:GetFullName())
-	end
-	SubLabel.Text = #list .. " trampoline weld(s)"
+	task.wait(0.4)
+	local list = scanTrampolines()
+	print("[K2 AUTO XP] trampolines:", #list, "| burst", BURST_SECONDS, "s + cooldown", COOLDOWN_SECONDS, "s")
 end)
 
-print("[K2 AUTO XP] ready · index 7 · all mutation trampolines")
+print("[K2 AUTO XP] ready · auto cooldown after ~33 XP cap")
